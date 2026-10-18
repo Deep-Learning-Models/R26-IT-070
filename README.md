@@ -1,573 +1,321 @@
-
-# LADA-Net: Plant Disease Detection System
-
-**R26-IT-070** - Advanced deep learning pipeline for automated plant disease classification using EfficientNet-B2 backbone with LADA augmentation modules.
-
-## 🎯 Project Overview
-
-LADA-Net is a transfer learning system that detects and classifies 10 tomato plant diseases using:
-- **EfficientNet-B2** pretrained backbone (ImageNet weights)
-- **LADA augmentation modules**: SLA (Spatial-Linear Augmentation), XCA (Cross-Channel Attention), DCG (Dense Connection Group)
-- **Intelligent data pipeline**: Class-weighted sampling for handling severe imbalance (299-4286 samples per class)
-- **Comprehensive testing**: 21 unit tests covering preprocessing, augmentation, and model components
-
-## 📊 Dataset
-
-**PlantVillage** - 10 tomato disease classes with extreme class imbalance:
-
-| Disease Class | Train | Val | Test | Total |
-|---|---|---|---|---|
-| Bacterial Spot | 463 | 99 | 99 | 661 |
-| Early Blight | 620 | 133 | 133 | 886 |
-| Late Blight | 743 | 159 | 159 | 1061 |
-| Leaf Mold | 355 | 76 | 76 | 507 |
-| Septoria Leaf Spot | 484 | 104 | 104 | 692 |
-| Spider Mites (Two spotted) | 623 | 133 | 133 | 889 |
-| Target Spot | 408 | 88 | 88 | 584 |
-| Tomato YellowLeaf Curl Virus | 300 | 64 | 64 | 428 |
-| Tomato Mosaic Virus | 210 | 45 | 45 | 300 |
-| Healthy | 2990 | 639 | 639 | 4268 |
-| **TOTAL** | **7196** | **1540** | **1540** | **10276** |
-
-## 🏗️ Project Architecture
-
-```
-R26-IT-070/
-├── data/
-│   ├── raw/                          # Original dataset (not in repo, download separately)
-│   │   └── plantvillage/
-│   │       ├── Bacterial_spot/
-│   │       ├── Early_blight/
-│   │       └── ... (10 disease classes)
-│   └── processed/                    # Split into train/val/test
-│       ├── train/
-│       │   ├── Bacterial_spot/
-│       │   ├── Early_blight/
-│       │   └── ...
-│       ├── val/
-│       └── test/
-│
-├── preprocessing/                    # Data loading & augmentation
-│   ├── notebooks/
-│   │   └── 01_data_exploration.ipynb # Interactive dataset analysis
-│   ├── scripts/
-│   │   ├── split_dataset.py          # Train/val/test splitting (70/15/15)
-│   │   ├── augment.py                # Augmentation pipelines + CutMix
-│   │   └── build_dataloader.py       # PyTorch Dataset & DataLoader with class weighting
-│   └── tests/
-│       └── test_preprocessing.py     # 8 tests: transforms, normalization, dataloaders
-│
-├── lada/                             # LADA-Net model implementation
-│   ├── modules/
-│   │   ├── __init__.py               # Model exports
-│   │   ├── sla.py                    # Squeeze-Linear Augmentation module
-│   │   ├── xca.py                    # Cross-Channel Attention module
-│   │   ├── dcg.py                    # Dense Connection Group module
-│   │   └── lada.py                   # Complete LADANet model (EfficientNet-B2 + LADA)
-│   └── tests/
-│       └── test_lada.py              # 13 tests: modules, output shapes, gradients
-│
-├── configs/
-│   └── default.yaml                  # Centralized configuration
-│
-├── docs/
-│   ├── class_distribution.png        # Bar chart of class imbalance
-│   ├── augmentation_sample.png       # 4-grid of augmented images
-│   └── architecture.md               # Detailed architecture documentation
-│
-├── requirements.txt                  # Pinned dependencies (no version drift)
-└── README.md                         # This file
-```
-
-## 🔄 Data Pipeline (3 Stages)
-
-### Stage 1: Loading & Exploration
-**File**: [preprocessing/notebooks/01_data_exploration.ipynb](preprocessing/notebooks/01_data_exploration.ipynb)
-
-Interactive Jupyter notebook that:
-1. Loads config from `configs/default.yaml`
-2. Counts images per disease class (reveals 14:1 imbalance ratio)
-3. Generates bar chart saved to `docs/class_distribution.png`
-4. Displays 3 random images per class for visual inspection
-5. Analyzes dimension distribution (all .jpg images)
-
-**Key Output**: Discovers extreme class imbalance requiring weighted sampling strategy.
-
-### Stage 2: Dataset Splitting
-**File**: [preprocessing/scripts/split_dataset.py](preprocessing/scripts/split_dataset.py)
-
-Converts raw dataset into train/val/test splits:
-
-```
-raw/plantvillage/
-  └── Disease1/, Disease2/, ...
-        └── *.jpg files
-
-                    ↓ (split_dataset.py)
-
-processed/
-  ├── train/ (70%)    → 7,196 images
-  ├── val/ (15%)      → 1,540 images
-  └── test/ (15%)     → 1,540 images
-```
-
-**Algorithm**:
-1. Read config from `configs/default.yaml` (paths, split ratios, seed)
-2. Collect all `.jpg` files per disease class
-3. First split: separate test set (15% of all data)
-4. Second split: separate validation from training (15% of remainder)
-5. Copy files to `data/processed/` with progress bar (tqdm)
-6. Print summary table showing split distribution
-
-**Key Feature**: Maintains class distribution across splits (stratified splitting).
-
-### Stage 3: Preprocessing & Augmentation
-**File**: [preprocessing/scripts/augment.py](preprocessing/scripts/augment.py)
-
-Two-pipeline transformation system:
-
-#### Training Pipeline (13 augmentation steps):
-1. **Geometric**: HorizontalFlip(50%), VerticalFlip(20%), RandomRotate90(30%)
-2. **Affine**: Affine transformations with translate_percent
-3. **Color**: ColorJitter with brightness/contrast/saturation/hue variations
-4. **Distortion**: ElasticTransform, GridDistortion for robustness
-5. **Dropout**: CoarseDropout for regularization
-6. **Normalization**: ImageNet mean/std normalization
-7. **Tensor**: Convert to PyTorch tensor
-
-#### Validation Pipeline (3 steps):
-1. Resize to 256×256
-2. ImageNet normalization
-3. Convert to PyTorch tensor
-
-#### Special Functions:
-- **cutmix_batch()**: Mix two images in batch, swap rectangular regions using Beta distribution (CutMix regularization)
-- **Version-aware helpers**: Runtime detection of albumentations parameter names (handles API changes across versions)
-
-**Key Code Pattern**:
-```python
-# Training
-x_aug = get_train_transform()(image=x)['image']  # PIL → (3, 256, 256) tensor
-
-# Validation
-x_val = get_val_transform()(image=x)['image']    # PIL → (3, 256, 256) tensor
-
-# CutMix for batch mixing
-mixed_x, y_a, y_b, lam = cutmix_batch(batch_x, batch_y, alpha=1.0)
-```
-
-### Stage 4: DataLoader Factory
-**File**: [preprocessing/scripts/build_dataloader.py](preprocessing/scripts/build_dataloader.py)
-
-Creates PyTorch datasets and dataloaders with class weighting:
-
-**PlantVillageDataset Class**:
-- Loads RGB .jpg images from split folders
-- Applies transform (train/val/test)
-- Returns (torch.Tensor, int_label) pairs
-- Attributes: `.classes`, `.class_to_idx`, `.samples`
-
-**Class Weighting for Imbalance**:
-```
-Weight per class = 1.0 / class_count
-
-Example:
-  Mosaic Virus (300 images)    → weight = 0.0033
-  Healthy (4268 images)        → weight = 0.0002
-  Ratio: 16.5× weight difference
-```
-
-**WeightedRandomSampler**: Applied ONLY to training dataloader
-- Oversamples rare classes → balances training
-- Validation/test use standard sequential sampling
-
-**Output Dictionary**:
-```python
-dataloaders = {
-    'train': DataLoader(train_dataset, sampler=weighted_sampler, batch_size=32),
-    'val': DataLoader(val_dataset, batch_size=32),
-    'test': DataLoader(test_dataset, batch_size=32),
-    'class_names': ['Bacterial_spot', 'Early_blight', ...],
-    'class_to_idx': {0: 'Bacterial_spot', ...},
-    'num_classes': 10
-}
-```
-
-## 🧠 Model Architecture
-
-### Backbone: EfficientNet-B2
-**Source**: PyTorch torchvision (ImageNet pretrained)
-
-```
-Input: (B, 3, 256, 256)
-    ↓
-EfficientNet-B2 backbone (conv blocks + MBConv layers)
-    ↓
-Output: (B, 1408, 8, 8)  ← 1408 channels at 8×8 feature map
-```
-
-**Why EfficientNet-B2**:
-- Efficient scaling: balances accuracy & computational cost
-- Strong ImageNet pretrained weights (transfer learning)
-- Outputs rich 1408-channel features for LADA modules
-- ~10M parameters (small enough for fine-tuning)
-
-### LADA Augmentation Modules
-
-#### 1️⃣ SLA (Squeeze-Linear Augmentation)
-**File**: [lada/modules/sla.py](lada/modules/sla.py)
-
-Applies spatial + channel augmentation to feature maps:
-
-```
-Input: (B, 1408, 8, 8)
-    ↓
-Squeeze: Global average pooling → (B, 1408)
-    ↓
-Split:
-  - Spatial aug: Conv2d(kernel=7) → (B, 1408, 8, 8)
-  - Channel aug: Linear(1408 → 1408) → (B, 1408, 1, 1) → expand
-    ↓
-Combine: x + spatial + channel + dropout
-    ↓
-Output: (B, 1408, 8, 8)
-```
-
-**Purpose**: Learn both spatial patterns and channel correlations.
-
-#### 2️⃣ XCA (Cross-Channel Attention)
-**File**: [lada/modules/xca.py](lada/modules/xca.py)
-
-Attention mechanism across channels:
-
-```
-Input: (B, 1408, 8, 8)
-    ↓
-Project to Q, K, V (dimension reduction: 1408 → 352)
-    ↓
-Attention: softmax(Q·K / √d) · V
-    ↓
-Expand back to 1408 channels
-    ↓
-Output: (B, 1408, 8, 8)
-```
-
-**Purpose**: Learn which channel combinations matter for disease detection.
-
-#### 3️⃣ DCG (Dense Connection Group)
-**File**: [lada/modules/dcg.py](lada/modules/dcg.py)
-
-Dense connections across 3 sequential layers (inspired by DenseNet):
-
-```
-Input: (B, 1408, 8, 8)
-    ↓
-d1 = Conv2d(1408 → 1408) on x
-    ↓
-d2 = Conv2d(1408+256 → 1408) on [x, d1]
-    ↓
-d3 = Conv2d(1408+512 → 1408) on [x, d1, d2]
-    ↓
-Projection: Conv2d(1408+768 → 1408)
-    ↓
-Residual: output + x
-    ↓
-Output: (B, 1408, 8, 8)
-```
-
-**Purpose**: Reuse features across layers, increase feature richness.
-
-### Complete Model: LADANet
-**File**: [lada/modules/lada.py](lada/modules/lada.py)
-
-Full pipeline combining EfficientNet-B2 + LADA modules:
-
-```
-Input image: (B, 3, 256, 256)
-    ↓
-EfficientNet-B2 backbone
-    → (B, 1408, 8, 8)
-    ↓
-SLA module (Squeeze-Linear Augmentation)
-    → (B, 1408, 8, 8)
-    ↓
-XCA module (Cross-Channel Attention)
-    → (B, 1408, 8, 8)
-    ↓ [Residual connection]
-    ↓
-DCG module (Dense Connection Group)
-    → (B, 1408, 8, 8)
-    ↓
-Global Average Pooling
-    → (B, 1408)
-    ↓
-Dropout(0.1)
-    ↓
-Linear(1408 → 10)
-    → (B, 10) logits
-    ↓
-Output: 10 disease class predictions
-```
-
-**Model Capabilities**:
-```python
-model = LADANet(num_classes=10)
-
-# Forward pass
-logits = model(images)  # (B, 3, 256, 256) → (B, 10)
-
-# Transfer learning control
-model.freeze_backbone()    # Freeze EfficientNet, train LADA modules only
-model.unfreeze_backbone()  # Train entire model
-
-# Load from config
-model = load_model_from_config('configs/default.yaml', device='cuda')
-```
-
-## ⚙️ Configuration System
-
-**File**: [configs/default.yaml](configs/default.yaml)
-
-Centralized YAML configuration for entire pipeline:
-
-```yaml
-data:
-  raw_dir: data/raw/plantvillage
-  split_dir: data/processed
-  image_size: 256
-  num_classes: 10
-  split_ratios:
-    train: 0.70
-    val: 0.15
-    test: 0.15
-  seed: 42
-
-dataloader:
-  batch_size: 32
-  num_workers: 4
-  pin_memory: true
-
-augmentation:
-  use_cutmix: true
-  elastic_transform: true
-  color_jitter: true
-  horizontal_flip_prob: 0.5
-
-backbone:
-  name: efficientnet_b2
-  pretrained: true
-  out_channels: 1408         # EfficientNet-B2 actual output
-  feature_map_size: 8
-
-lada:
-  in_channels: 1408          # Must match backbone.out_channels
-  sla_kernel_size: 7
-  dcg_hidden_dim: 256
-  dropout: 0.1
-
-classes:
-  - name: Bacterial_spot
-    count: 661
-  - name: Early_blight
-    count: 886
-  - ... (all 10 classes)
-```
-
-**Why YAML**:
-- Human-readable configuration management
-- Easy to switch between experiments (CPU/GPU, batch sizes, augmentations)
-- Version control friendly (git diff shows changes clearly)
-- Loaded at runtime (no recompilation needed)
-
-## 🧪 Testing Suite (21 Tests)
-
-### Preprocessing Tests (8 tests)
-**File**: [preprocessing/tests/test_preprocessing.py](preprocessing/tests/test_preprocessing.py)
-
-| Test | Purpose |
-|---|---|
-| `test_train_transform_output_shape` | Verify augmented images are (3, 256, 256) |
-| `test_val_transform_output_shape` | Verify validation pipeline output shape |
-| `test_normalization_applied` | Confirm ImageNet normalization applied |
-| `test_no_nan_in_output` | Check for NaN values in tensors |
-| `test_cutmix_output_shapes` | CutMix produces correct batch & label shapes |
-| `test_dataset_loads_correctly` | PlantVillageDataset loads 10 classes |
-| `test_dataloader_batch_shape` | DataLoader batches are (32, 3, 256, 256) |
-| `test_weighted_sampler_rare_class_weight` | Rare classes weighted 10× higher |
-
-**Status**: ✅ 8/8 PASSING
-
-### LADA Module Tests (13 tests)
-**File**: [lada/tests/test_lada.py](lada/tests/test_lada.py)
-
-| Module | Tests | Purpose |
-|---|---|---|
-| **SLA** | 2 | Output shape, receptive field increase |
-| **XCA** | 2 | Output shape, trainable parameters |
-| **DCG** | 2 | Output shape, residual connection |
-| **LADANet** | 7 | Output shape, parameter count, freeze/unfreeze, gradients, inference mode, no NaN |
-
-**Status**: ✅ 13/13 PASSING
-
-**Key Test Assertions**:
-```python
-# Shape tests
-assert model(x).shape == (batch_size, num_classes)
-
-# Gradient flow
-loss = model(x).sum()
-loss.backward()
-for param in model.parameters():
-    assert param.grad is not None
-
-# Class weighting (10× difference for imbalanced classes)
-assert rare_class_weight > common_class_weight
-```
-
-## 📦 Dependencies (Pinned Versions)
-
-**File**: [requirements.txt](requirements.txt)
-
-Why version pinning:
-- **Albumentations 1.3.1**: Parameter names changed across versions (e.g., `shift_limit` → `translate_percent`)
-- **PyTorch 2.2.1 + TorchVision 0.17.1**: LTS versions for stability
-- **scikit-learn 1.4.2**: `WeightedRandomSampler` compatibility
-
-```
-torch==2.2.1                    # Deep learning framework
-torchvision==0.17.1             # Pre-trained models, transforms
-albumentations==1.3.1           # Image augmentation (PINNED for stability)
-PyYAML==6.0.1                   # Config parsing
-scikit-learn==1.4.2             # Train/test splitting, metrics
-pytest==8.3.4                   # Unit testing
-numpy==1.26.4                   # Numerical operations
-Pillow==10.2.0                  # Image I/O
-tqdm==4.67.1                    # Progress bars
-matplotlib==3.8.4               # Visualization
-efficientnet-pytorch==0.7.1     # Alternative EfficientNet (optional)
-```
-
-## 🚀 Quick Start
-
-### 1. Set Up Environment
-```bash
-# Clone repo
-cd /Users/mac/Projects/R26-IT-070
-
-# Create virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### 2. Prepare Dataset
-```bash
-# Download PlantVillage dataset from Kaggle/GitHub
-# Place raw images in: data/raw/plantvillage/
-# Structure:
-# data/raw/plantvillage/
-#   ├── Bacterial_spot/
-#   ├── Early_blight/
-#   └── ... (all 10 disease directories with .jpg files)
-
-# Split dataset into train/val/test
-python preprocessing/scripts/split_dataset.py
-```
-
-### 3. Explore Data (Optional)
-```bash
-# Run interactive notebook
-jupyter notebook preprocessing/notebooks/01_data_exploration.ipynb
-```
-
-### 4. Run All Tests
-```bash
-# Test entire pipeline (21 tests)
-pytest -v
-
-# Test specific component
-pytest preprocessing/tests/ -v      # 8 preprocessing tests
-pytest lada/tests/ -v               # 13 LADA module tests
-```
-
-### 5. Load Model & Make Predictions
-```python
-import torch
-from lada.modules import load_model_from_config
-
-# Load model
-model = load_model_from_config('configs/default.yaml', device='cuda')
-
-# Load a single image
-from PIL import Image
-from preprocessing.scripts.augment import get_val_transform
-
-image = Image.open('path/to/tomato_disease.jpg')
-transform = get_val_transform(image_size=256)
-tensor = transform(image=np.array(image))['image'].unsqueeze(0)  # Add batch dim
-
-# Predict
-with torch.no_grad():
-    logits = model(tensor.to('cuda'))
-    probabilities = torch.softmax(logits, dim=1)
-    predicted_class = probabilities.argmax(dim=1).item()
-
-print(f"Predicted class: {model.class_names[predicted_class]}")
-```
-
-## 📈 Project Phases
-
-| Phase | Status | Components |
-|---|---|---|
-| **1. Data Loading** | ✅ Complete | Raw dataset → PlantVillage, 10 disease classes |
-| **2. Preprocessing** | ✅ Complete | Split, augmentation, dataloaders with class weighting |
-| **3. Model Architecture** | ✅ Complete | EfficientNet-B2 + SLA/XCA/DCG modules |
-| **4. Testing** | ✅ Complete | 21 tests, all passing (8 preprocessing + 13 LADA) |
-| **5. Training Loop** | ✅ Complete | Optimizer, loss function, train/val/test loops, checkpoints |
-| **6. Evaluation** | ⏳ Planned | Metrics (accuracy, F1, confusion matrix) |
-| **7. Checkpointing** | ⏳ Planned | Save/load best models |
-| **8. Inference API** | ⏳ Planned | REST API or batch prediction |
-
-## 🔍 Current Status
-
-✅ **All systems operational**
-- 21/21 tests passing
-- Complete preprocessing pipeline: loading → splitting → augmentation → dataloaders
-- Full model architecture: EfficientNet-B2 + 3 LADA modules
-- Comprehensive configuration management (YAML-based)
-- Class imbalance handling via weighted sampling
-
-📊 **Next Steps**
-1. Expand evaluation with confusion matrix and per-class metrics
-2. Add inference script for single-image and batch prediction
-3. Add experiment tracking if you want TensorBoard or CSV logs
-
-## 📝 File Structure Reference
-
-**Key Files You'll Use**:
-- `configs/default.yaml` - Change batch size, augmentation settings, model parameters
-- `preprocessing/scripts/split_dataset.py` - Run to split raw dataset
-- `preprocessing/scripts/build_dataloader.py` - Import `get_dataloaders()` in training script
-- `lada/modules/lada.py` - Import `LADANet` and `load_model_from_config()` for training
-- `requirements.txt` - Install all dependencies
-
-**Testing**:
-- `pytest` - Run all 21 tests
-- `pytest -k "preprocessing"` - Run only preprocessing tests
-- `pytest -k "lada"` - Run only LADA module tests
-
-## 📚 References
-
-- **EfficientNet**: [Tan & Le (2019)](https://arxiv.org/abs/1905.11946)
-- **Transfer Learning**: Using ImageNet pretrained weights for domain-specific tasks
-- **Class Imbalance**: [WeightedRandomSampler](https://pytorch.org/docs/stable/data.html#torch.utils.data.WeightedRandomSampler)
-- **Augmentation**: [Albumentations Library](https://albumentations.ai/)
-- **CutMix**: [Yun et al. (2019)](https://arxiv.org/abs/1905.04412)
+<div align="center">
+
+# 🍅 ALAS-Net
+### Automated Leaf Analysis System Network
+
+**One tomato leaf photo in. Disease, severity, lesion map and treatment out.**
+
+![Project](https://img.shields.io/badge/R26--IT--070-SLIIT%20IT4010-2E7D32?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.2.1-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
+![Backbone](https://img.shields.io/badge/Backbone-EfficientNet--B2-6A1B9A?style=for-the-badge)
+![Dataset](https://img.shields.io/badge/PlantVillage-18%2C160%20tomato%20leaves-F9A825?style=for-the-badge)
+
+[What it does](#-what-alas-net-does) ·
+[Quick start](#-quick-start-for-team-members) ·
+[A–Z setup](#-full-setup-a-to-z) ·
+[Repo map](#-repo-map) ·
+[Team workflow](#-team-workflow) ·
+[Troubleshooting](#-troubleshooting)
+
+</div>
 
 ---
 
-**Last Updated**: May 2026  
-**Test Status**: ✅ 21/21 PASSING  
-**Ready for**: Training loop implementation
+## 🌱 Why this exists
+
+Tomato diseases like Early Blight, Bacterial Spot and Mosaic Virus can wipe out **20–40% of a season's harvest**. Most small-scale farmers can't get to a plant pathologist in time. Existing apps name the disease and stop there.
+
+ALAS-Net answers the four questions a farmer actually has, from **one photo** and **one shared model**:
+
+| ❓ The farmer asks | 🧠 ALAS-Net head | 📤 Output |
+|---|---|---|
+| *What is it?* | **Head 1 · Disease classification** | 1 of 10 classes + a confidence % (e.g. *Early Blight 82%*) |
+| *How bad is it?* | **Head 2 · Severity estimation** | Grade 0 (healthy) → 4 (severe), ordinal-aware |
+| *Where is it?* | **Head 3 · Lesion segmentation** | Pixel mask of the diseased area |
+| *What do I do?* | **Head 4 · Treatment recommendation** | Retrieved treatment + confidence, with a flag when unsure |
+
+> 🌍 Supports **SDG 1** (No Poverty), **SDG 2** (Zero Hunger), **SDG 12** (Responsible Production) and **SDG 15** (Life on Land).
+
+---
+
+## 🧠 What ALAS-Net does
+
+```mermaid
+flowchart LR
+    A["🍃 Leaf photo<br/>256 × 256 RGB"] --> B["EfficientNet-B2<br/>1408 × 8 × 8"]
+    B --> C["SLA"] --> D["XCA"] --> E["DCG"]
+    E --> H1["🩺 Head 1<br/>Disease + confidence"]
+    E --> H2["📈 Head 2<br/>Severity 0–4"]
+    E --> H3["🗺️ Head 3<br/>Lesion mask"]
+    E --> H4["💊 Head 4<br/>Treatment"]
+```
+
+The image is read **once** by the backbone. The **LADA** attention module (SLA → XCA → DCG) sharpens the features, and all four heads read the same focused feature map.
+
+### 🔬 The LADA module: code vs proposal
+
+| Block | What the code does today (`lada/modules/`) | What the proposal describes |
+|---|---|---|
+| **SLA** | Squeeze-Linear Augmentation: a spatial 7×7 conv plus a channel linear layer | Spatial Lesion Attention: *where* the lesions are |
+| **XCA** | Cross-Channel Attention, 1408 → 352 → 1408, with a residual | Cross-Covariance Channel Attention: *which* features fire together |
+| **DCG** | Dense Connection Group: 3 densely connected conv layers + residual | **Disease-Conditional Gate**: re-weights channels by the likely disease (the main novelty) |
+
+> ⚠️ **Team note:** the DCG in the code and the DCG in the proposal are different ideas. Agree on the final version before the progress presentations, because examiners compare the code with the proposal.
+
+---
+
+## 📊 The data
+
+**PlantVillage, tomato subset:** 10 classes, **18,160** colour images. The dataset is badly imbalanced:
+
+```text
+Yellow Leaf Curl Virus  ████████████████████████████████████████  5,357
+Bacterial Spot          ████████████████                          2,127
+Late Blight             ██████████████                            1,909
+Septoria Leaf Spot      █████████████                             1,771
+Spider Mites            █████████████                             1,676
+Healthy                 ████████████                              1,591
+Target Spot             ██████████                                1,404
+Early Blight            ███████                                   1,000
+Leaf Mold               ███████                                     952
+Mosaic Virus            ███                                         373   ← 14× rarer
+```
+
+- **Split:** 70 / 15 / 15, stratified per class, seed 42 (`preprocessing/scripts/split_dataset.py`)
+- **Imbalance tools:** a `WeightedRandomSampler` (dataloader) and focal loss (training). ⚠️ Use **one at a time**, because both together over-correct.
+- **Images never go into git.** Every member downloads them once (see letters **O–R** below).
+
+<p align="center"><img src="docs/class_distribution.png" width="640" alt="Class distribution of the PlantVillage tomato subset"></p>
+
+---
+
+## ⚡ Quick start for team members
+
+> Already set up once? This is all you need. New laptop? Do the [full A–Z](#-full-setup-a-to-z) instead.
+
+```powershell
+# 1 · go to the repo (Windows PowerShell)
+cd "C:\path\to\R26-IT-070"
+
+# 2 · build the environment: .venv + PyTorch 2.2.1 (GPU if found) + pinned packages + notebook kernel
+.\tools\setup_env.ps1
+
+# 3 · copy the 10 tomato classes from your unzipped Kaggle download
+.\.venv\Scripts\Activate.ps1
+python tools/get_plantvillage.py --source "$env:USERPROFILE\Downloads\plantvillage dataset"
+
+# 4 · split, test, check
+python preprocessing/scripts/split_dataset.py
+python -m pytest -v
+python tools/doctor.py        # 0 failures = ready 🎉
+```
+
+---
+
+## 🔤 Full setup, A to Z
+
+Six drawers, 26 letters. Open each one and work top to bottom. A printable copy lives in [`SETUP.md`](SETUP.md).
+
+<details>
+<summary><b>🧰 Tools · A–E</b> · accounts, Git, editor, driver, Python</summary>
+
+| | Step | Do this | ✅ Works when |
+|---|---|---|---|
+| **A** | Accounts | GitHub account with access to `Deep-Learning-Models/R26-IT-070` · free Kaggle account | The repo page opens while you're signed in |
+| **B** | Base tools | Install **Git** + **GitHub Desktop** → File → Options → Accounts → Sign in | `git --version` prints a version |
+| **C** | Code editor | **VS Code** + the *Python* and *Jupyter* extensions | `code --version` works |
+| **D** | Driver | Latest **NVIDIA driver**, then restart | `nvidia-smi` shows your GPU |
+| **E** | Exact Python | **Python 3.10** from python.org, tick *Add to PATH* | `py -3.10 --version` → 3.10.x |
+
+</details>
+
+<details>
+<summary><b>🐙 Repo · F–J</b> · fetch, branch, permissions, tidy, team questions</summary>
+
+| | Step | Do this | ✅ Works when |
+|---|---|---|---|
+| **F** | Fetch | GitHub Desktop → **Fetch origin** → **Pull origin** on `main` | "Last fetched just now" |
+| **G** | Git + branch | Options → Git (name + GitHub email) · **New branch** `<YourName>-<feature>` → **Publish** | Toolbar shows your branch |
+| **H** | Hand permission | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` (once) | `.ps1` scripts run |
+| **I** | Inspect + tidy | `.\tools\cleanup.ps1` → review it in GitHub Desktop → commit | Only empty placeholders and stray images changed |
+| **J** | Jot questions | Agree on the open team decisions ([below](#-open-team-decisions)) | Answers are in the logbook |
+
+</details>
+
+<details>
+<summary><b>🐍 Python · K–N</b> · one-shot setup, VS Code, CUDA, notebooks</summary>
+
+| | Step | Do this | ✅ Works when |
+|---|---|---|---|
+| **K** | Kick off | `.\tools\setup_env.ps1` (`-Cpu` if you have no NVIDIA GPU, `-Fresh` to rebuild) | Ends with "Setup finished" |
+| **L** | Link VS Code | Ctrl+Shift+P → *Python: Select Interpreter* → `.venv` | The prompt shows `(.venv)` |
+| **M** | Make CUDA work | `python -c "import torch; print(torch.cuda.is_available())"` | Prints `True` |
+| **N** | Notebook kernel | In a notebook, choose the kernel **R26-IT-070 (.venv)** | Cells import torch |
+
+</details>
+
+<details>
+<summary><b>🍅 Data · O–R</b> · download, place, count, split</summary>
+
+| | Step | Do this | ✅ Works when |
+|---|---|---|---|
+| **O** | Obtain | Download [PlantVillage on Kaggle](https://www.kaggle.com/datasets/abdallahalidev/plantvillage-dataset) and unzip it **outside** the repo | You can see `color\Tomato___Early_blight` |
+| **P** | Place | `python tools/get_plantvillage.py --source "<unzipped folder>"` | Every row says `ok`, total 18160 |
+| **Q** | Quantity | `python tools/doctor.py` → Dataset section | 10 × `[ OK ]` |
+| **R** | Run split | `python preprocessing/scripts/split_dataset.py` | "Split complete" → `data/split/` |
+
+</details>
+
+<details>
+<summary><b>🧪 Prove it · S–V</b> · tests, a real batch, model size, doctor</summary>
+
+| | Step | Do this | ✅ Works when |
+|---|---|---|---|
+| **S** | Sanity tests | `python -m pytest -v` | All tests pass |
+| **T** | Test a batch | `python preprocessing/scripts/build_dataloader.py` | `torch.Size([32, 3, 256, 256])` |
+| **U** | Understand size | `python calculate_params.py` | SLA / XCA / DCG parameter counts |
+| **V** | Verify | `python tools/doctor.py` | `0 failures` |
+
+</details>
+
+<details>
+<summary><b>🚀 Ship · W–Z</b> · logbook, Colab, first PR, start building</summary>
+
+| | Step | Do this | ✅ Works when |
+|---|---|---|---|
+| **W** | Write logbook | Date, GPU, torch version, doctor result, problems and fixes | The entry is signed |
+| **X** | eXtra GPU | Open `notebooks/03_train_colab.ipynb` in Colab (data on Drive, token prompt) | The doctor shows CUDA on Colab |
+| **Y** | Your commit | Commit on your branch → **Push origin** → **Pull request** to `main` | A teammate is assigned as reviewer |
+| **Z** | Zero to train | Start your head / module on the 1408-channel features | Green tests + green doctor |
+
+</details>
+
+### 🩺 What a healthy doctor looks like
+
+```text
+R26-IT-070 environment doctor
+== Python ==================================================
+[ OK ] Python 3.10  (3.10.11)
+[ OK ] Running inside the repo's .venv
+== GPU =====================================================
+[ OK ] CUDA available  (NVIDIA GeForce RTX 3080, 10.0 GB VRAM, CUDA 12.1)
+== Dataset =================================================
+[ OK ] Total raw images  (18160 of 18,160)
+[ OK ] data/split exists  (train …, val …, test …)
+============================================================
+… OK   0 warnings   0 failures
+All green. Your environment is ready.
+```
+<sub>Example output: your GPU name, VRAM and counts will differ.</sub>
+
+---
+
+## 🗺️ Repo map
+
+```text
+R26-IT-070/
+├── 📄 README.md               ← you are here
+├── 📄 SETUP.md                ← printable A–Z checklist
+├── 📄 requirements.txt        ← pinned versions (torch 2.2.1, albumentations 1.3.1 …)
+├── ⚙️ configs/default.yaml    ← ONE place for every setting, never hard-code
+├── 🧰 tools/                  ← setup_env.ps1 · doctor.py · get_plantvillage.py · cleanup.ps1
+├── 🍃 preprocessing/          ← split · augment (+ CutMix) · dataloader · 8 tests
+├── 🔬 lada/                   ← SLA · XCA · DCG · LADANet · 13 tests
+├── 🏋️ training/               ← trainer + train.py (focal loss, AMP, checkpoints)
+├── 💊 retrieval/              ← treatment knowledge base + FAISS (planned)
+├── 📓 notebooks/              ← 03_train_colab.ipynb (Colab setup)
+├── 🖼️ docs/                   ← class distribution + feature-map figures
+├── 📱 tomato_guard/           ← Flutter mobile app (UI prototype)
+└── 🚫 data/  checkpoints/  .venv/   ← git-ignored, never committed
+```
+
+### 📍 Where each head lives
+
+| Head | Owner | Code | Status |
+|---|---|---|---|
+| Backbone + LADA | Aazim | `lada/modules/` | ✅ Built + 13 tests |
+| Data pipeline | team | `preprocessing/scripts/` | ✅ Built + 8 tests |
+| Training loop | team | `training/` | ✅ Built |
+| **Head 1 · Disease** | **Maduwantha** | *agree: `src/heads.py` or next to `lada/`* | 🚧 In progress |
+| Head 2 · Severity | *add name* | *planned* | 📝 Planned |
+| Head 3 · Segmentation | *add name* | *planned* | 📝 Planned |
+| Head 4 · Treatment | *add name* | `retrieval/` | 📝 Placeholders |
+| Mobile app | *add name* | `tomato_guard/` | 🎨 UI prototype, model not connected yet |
+
+<sub>✏️ Team: fill in the names and update the statuses as you go.</sub>
+
+---
+
+## 🤝 Team workflow
+
+```mermaid
+flowchart LR
+    F["🔄 Fetch origin"] --> U["⬇️ Update from main"] --> C["✍️ Code"] --> T["🧪 pytest + doctor"] --> M["💾 Commit"] --> P["☁️ Push origin"] --> R["🔍 Pull request"] --> G["✅ Review → merge"]
+```
+
+**🌿 Branches:** never commit to `main`. Name branches `<YourName>-<feature>`, e.g. `Aazim-lada-features`, `Maduwantha-classification-head`.
+
+**✅ Before every pull request**
+- [ ] `python -m pytest -v` passes
+- [ ] `python tools/doctor.py` shows 0 failures
+- [ ] No data, checkpoints or `.venv` in the Changes list
+- [ ] Settings live in `configs/default.yaml`, not in your code
+- [ ] A teammate is assigned as reviewer
+- [ ] A logbook entry is written
+
+**🚫 What never goes into git:** images, `data/`, `checkpoints/`, `*.pt` / `*.pth`, `.venv/`, `*.csv`, `*.json`. GitHub rejects files over 100 MB, and one bad commit is painful to undo.
+
+---
+
+## 🧭 Open team decisions
+
+| # | Question | Why it matters |
+|---|---|---|
+| 1 | **EfficientNet-B2 (1408 ch, in code) or B0 (1280 ch, in proposal)?** | Every head's input size depends on it |
+| 2 | **Which DCG:** Dense Connection Group (code) or Disease-Conditional Gate (proposal)? | It's the main novelty claim in the viva |
+| 3 | **Sampler or focal-loss alpha** for imbalance? | Using both over-corrects |
+| 4 | Keep or drop the empty `src/` files and `notebooks/04_inference_demo.ipynb`? | Avoid two homes for the same code |
+| 5 | Where does each head's code live? | Prevents merge conflicts |
+
+---
+
+## 🛠️ Troubleshooting
+
+| 😵 You see | 🩹 Do this |
+|---|---|
+| `running scripts is disabled on this system` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` (once) |
+| `torch.cuda.is_available()` → `False` | Update the NVIDIA driver, then `.\tools\setup_env.ps1 -Fresh` |
+| `No suitable Python runtime found` | Install Python **3.10** from python.org |
+| `Raw dataset folder not found` | Run `tools/get_plantvillage.py` (letter **P**) first |
+| `Loaded 0 images` | Run `split_dataset.py` (letter **R**) |
+| `ModuleNotFoundError: lada` | Run commands from the **repo root** with `.venv` active |
+| CUDA out of memory | Lower `dataloader.batch_size` to 16 in `configs/default.yaml`, or use Colab |
+| Merge conflict | GitHub Desktop → *Open in Visual Studio Code* → choose the version to keep → *Continue merge* |
+
+---
+
+## 🎓 Academic context
+
+| | |
+|---|---|
+| **Module** | IT4010 Research Project · BSc (Hons) IT · SLIIT |
+| **Group** | R26-IT-070 |
+| **Supervisor** | Dr. Nathali Silva |
+| **Assessment** | Proposal 12% · PP1 15% · Paper 10% · PP2 18% · Website 2% · Final report 19% · Viva 20% · Logbook 4% |
+
+### 📚 Key references
+- Tan & Le (2019). *EfficientNet: Rethinking Model Scaling for CNNs.* ICML.
+- Lin et al. (2017). *Focal Loss for Dense Object Detection.* ICCV.
+- Ronneberger et al. (2015). *U-Net.* MICCAI.
+- Cao et al. (2020). *Rank-Consistent Ordinal Regression (CORAL).* Pattern Recognition Letters.
+- Johnson et al. (2019). *Billion-scale similarity search with GPUs (FAISS).* IEEE Trans. Big Data.
+- Mohanty et al. (2016). *Using deep learning for image-based plant disease detection.* Frontiers in Plant Science.
+
+---
+
+<div align="center">
+
+**Built with 🍅 by team R26-IT-070** · Academic project, please ask the team before reusing the code.
+
+</div>
