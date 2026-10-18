@@ -8,7 +8,8 @@ import '../models/disease_result.dart';
 import '../models/severity_result.dart';
 
 class SegmentationService {
-  static const String _modelAsset = 'assets/models/alas_net_NO_SLA.tflite';
+  // ALAS-Net with SLA (Spatial Lesion Attention) - produces tighter, more accurate lesion masks
+  static const String _modelAsset = 'assets/models/alas_net_Severity_Segmentation_SLA_.tflite';
 
   /// Runs segmentation inference using alas_net_NO_SLA.tflite to produce
   /// pixel-level disease masks and severity metrics.
@@ -138,39 +139,45 @@ class SegmentationService {
       numChannels: 4,
     );
 
-    // Step 1: Identify healthy leaf tissue predicted by ALAS-Net
+    // SLA model outputs: high probability = LESION, low probability = healthy foliage
+    // (opposite of NO_SLA which predicts healthy tissue as high confidence)
     final List<List<double>> probMap = List.generate(targetSize, (_) => List.filled(targetSize, 0.0));
-    final List<List<bool>> isHealthyFoliage = List.generate(targetSize, (_) => List.filled(targetSize, false));
-    int healthyPixels = 0;
+    final List<List<bool>> isLesion = List.generate(targetSize, (_) => List.filled(targetSize, false));
+    final List<List<bool>> isLeafTissue = List.generate(targetSize, (_) => List.filled(targetSize, false));
 
     for (int y = 0; y < targetSize; y++) {
       for (int x = 0; x < targetSize; x++) {
         final double rawVal = maskOutput[0][y][x][0];
+        // Apply sigmoid if output is a logit (outside 0-1 range)
         final double prob = (rawVal > 1.0 || rawVal < 0.0)
             ? (1.0 / (1.0 + exp(-rawVal)))
             : rawVal;
         probMap[y][x] = prob;
 
-        // Model predicts healthy green leaf tissue as high confidence
-        if (prob >= 0.45) {
-          isHealthyFoliage[y][x] = true;
-          healthyPixels++;
+        // SLA: high confidence = lesion pixel
+        // Use 0.50 threshold — SLA attention map is tight around actual lesions
+        if (prob >= 0.50) {
+          isLesion[y][x] = true;
+        }
+
+        // Leaf tissue = any prob > 0.10 (includes both healthy and lesion pixels)
+        if (prob >= 0.10) {
+          isLeafTissue[y][x] = true;
         }
       }
     }
 
-    // Step 2: Build morphological leaf envelope (closes lesion holes & yellow halos inside the leaf)
-    const int dilationRadius = 7;
+    // Morphological dilation to build full leaf envelope from any tissue signals
+    const int dilationRadius = 6;
     final List<List<bool>> leafEnvelope = List.generate(targetSize, (_) => List.filled(targetSize, false));
 
     for (int y = 0; y < targetSize; y++) {
       for (int x = 0; x < targetSize; x++) {
-        if (isHealthyFoliage[y][x]) {
+        if (isLeafTissue[y][x]) {
           final int minY = max(0, y - dilationRadius);
           final int maxY = min(targetSize - 1, y + dilationRadius);
           final int minX = max(0, x - dilationRadius);
           final int maxX = min(targetSize - 1, x + dilationRadius);
-
           for (int ny = minY; ny <= maxY; ny++) {
             for (int nx = minX; nx <= maxX; nx++) {
               leafEnvelope[ny][nx] = true;
@@ -180,32 +187,35 @@ class SegmentationService {
       }
     }
 
-    // Step 3: Highlight the EFFECTED / DISEASED lesions (lesion holes enclosed within the leaf surface)
+    // Count healthy (non-lesion leaf tissue) pixels for severity denominator
+    int healthyPixels = 0;
     int diseasePixels = 0;
 
     for (int y = 0; y < targetSize; y++) {
       for (int x = 0; x < targetSize; x++) {
+        // Only consider pixels that are within the actual leaf boundary
+        if (!leafEnvelope[y][x]) {
+          maskImage.setPixelRgba(x, y, 0, 0, 0, 0);
+          continue;
+        }
+
         final pixel = resized.getPixel(x, y);
-        final double prob = probMap[y][x];
-
-        // Is it inside the leaf boundary, but not healthy green leaf?
-        final bool isInsideLeaf = leafEnvelope[y][x];
-        final bool isHealthy = isHealthyFoliage[y][x];
-
-        // Check if pixel has plant/lesion tissue characteristics (not empty white/black background)
         final int brightness = (pixel.r + pixel.g + pixel.b).toInt();
-        final bool isNotBackground = brightness > 40 && brightness < 720;
+        final bool isNotBackground = brightness > 45 && brightness < 720;
 
-        if (isInsideLeaf && !isHealthy && isNotBackground) {
+        if (!isNotBackground) {
+          maskImage.setPixelRgba(x, y, 0, 0, 0, 0);
+          continue;
+        }
+
+        if (isLesion[y][x]) {
           diseasePixels++;
-          // Lesion severity intensity based on contrast
-          final double lesionConfidence = (1.0 - prob).clamp(0.5, 1.0);
-          final int alpha = (lesionConfidence * 220).toInt().clamp(140, 230);
-
-          // Highlight lesion in vibrant Coral/Red
+          // Alpha intensity proportional to lesion confidence above threshold
+          final double prob = probMap[y][x];
+          final int alpha = ((prob - 0.50) / 0.50 * 180 + 140).toInt().clamp(140, 230);
           maskImage.setPixelRgba(x, y, 239, 68, 68, alpha);
         } else {
-          // Healthy leaf & outside background remain clean and transparent
+          healthyPixels++;
           maskImage.setPixelRgba(x, y, 0, 0, 0, 0);
         }
       }

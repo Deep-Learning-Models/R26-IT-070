@@ -86,7 +86,7 @@ class DiseaseService {
   }
 
   static Future<_YoloOutput> _runYoloV8Inference(ProcessedImageData imageData) async {
-    const String modelAsset = 'assets/models/tomato_leaf_yolov8.tflite';
+    const String modelAsset = 'assets/models/classification.tflite';
     try {
       final ByteData modelData = await rootBundle.load(modelAsset);
       final Uint8List modelBytes = modelData.buffer.asUint8List();

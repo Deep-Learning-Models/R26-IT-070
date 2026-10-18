@@ -12,7 +12,7 @@ void main() {
 
     // Verify key UI elements render
     expect(find.text('Tomato Guard'), findsOneWidget);
-    expect(find.text('Take Photo'), findsOneWidget);
+    expect(find.text('LADA-Capture'), findsOneWidget);
     expect(find.text('Upload from Gallery'), findsOneWidget);
   });
 }

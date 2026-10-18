@@ -175,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Column(
                 children: [
                   PrimaryButton(
-                    label: 'Take Photo',
+                    label: 'LADA-Capture',
                     icon: Icons.camera_alt_outlined,
                     onPressed: () => _pickImage(ImageSource.camera),
                   ),

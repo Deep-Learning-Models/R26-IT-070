@@ -31,7 +31,8 @@ flutter:
 
   assets:
     - assets/models/tomato_leaf.tflite
-    - assets/models/tomato_leaf_yolov8.tflite
+    - assets/models/classification.tflite
+    - assets/models/alas_net_Severity_Segmentation_SLA_.tflite
     - assets/models/alas_net_NO_SLA.tflite
     - assets/models/labels.txt
     - assets/data/treatment_lookup.json

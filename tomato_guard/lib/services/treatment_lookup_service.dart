@@ -73,13 +73,13 @@ class TreatmentLookupService {
     final List<String> targetSeverities = [];
     switch (severityLevel) {
       case SeverityLevel.mild:
-        targetSeverities.addAll(['Mild', 'Healthy']);
+        targetSeverities.add('Mild');
         break;
       case SeverityLevel.moderate:
-        targetSeverities.addAll(['Moderate', 'Mild']);
+        targetSeverities.add('Moderate');
         break;
       case SeverityLevel.severe:
-        targetSeverities.addAll(['Severe', 'Extremely Severe', 'Moderate']);
+        targetSeverities.addAll(['Severe', 'Extremely Severe']);
         break;
       case SeverityLevel.healthy:
         targetSeverities.add('Healthy');
