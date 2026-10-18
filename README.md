@@ -1,15 +1,7 @@
 <div align="center">
 
-# 🍅 ALAS-Net
-### Automated Leaf Analysis System Network
+<img src="docs/readme/banner.svg" width="100%" alt="ALAS-Net: Automated Leaf Analysis System Network. One leaf photo in; disease, severity, lesion map and treatment out.">
 
-**One tomato leaf photo in. Disease, severity, lesion map and treatment out.**
-
-![Project](https://img.shields.io/badge/R26--IT--070-SLIIT%20IT4010-2E7D32?style=for-the-badge)
-![Python](https://img.shields.io/badge/Python-3.10-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.2.1-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
-![Backbone](https://img.shields.io/badge/Backbone-EfficientNet--B2-6A1B9A?style=for-the-badge)
-![Dataset](https://img.shields.io/badge/PlantVillage-18%2C160%20tomato%20leaves-F9A825?style=for-the-badge)
 
 [What it does](#-what-alas-net-does) ·
 [Quick start](#-quick-start-for-team-members) ·
@@ -41,15 +33,7 @@ ALAS-Net answers the four questions a farmer actually has, from **one photo** an
 
 ## 🧠 What ALAS-Net does
 
-```mermaid
-flowchart LR
-    A["🍃 Leaf photo<br/>256 × 256 RGB"] --> B["EfficientNet-B2<br/>1408 × 8 × 8"]
-    B --> C["SLA"] --> D["XCA"] --> E["DCG"]
-    E --> H1["🩺 Head 1<br/>Disease + confidence"]
-    E --> H2["📈 Head 2<br/>Severity 0–4"]
-    E --> H3["🗺️ Head 3<br/>Lesion mask"]
-    E --> H4["💊 Head 4<br/>Treatment"]
-```
+<img src="docs/readme/pipeline.svg" width="100%" alt="Pipeline: leaf photo 256×256 → EfficientNet-B2 (1408×8×8) → LADA attention (SLA, XCA, DCG) → four heads: disease, severity, lesion mask, treatment.">
 
 The image is read **once** by the backbone. The **LADA** attention module (SLA → XCA → DCG) sharpens the features, and all four heads read the same focused feature map.
 
@@ -69,24 +53,11 @@ The image is read **once** by the backbone. The **LADA** attention module (SLA �
 
 **PlantVillage, tomato subset:** 10 classes, **18,160** colour images. The dataset is badly imbalanced:
 
-```text
-Yellow Leaf Curl Virus  ████████████████████████████████████████  5,357
-Bacterial Spot          ████████████████                          2,127
-Late Blight             ██████████████                            1,909
-Septoria Leaf Spot      █████████████                             1,771
-Spider Mites            █████████████                             1,676
-Healthy                 ████████████                              1,591
-Target Spot             ██████████                                1,404
-Early Blight            ███████                                   1,000
-Leaf Mold               ███████                                     952
-Mosaic Virus            ███                                         373   ← 14× rarer
-```
+<img src="docs/readme/imbalance.svg" width="100%" alt="Images per class: Yellow Leaf Curl Virus 5,357; Bacterial Spot 2,127; Late Blight 1,909; Septoria 1,771; Spider Mites 1,676; Healthy 1,591; Target Spot 1,404; Early Blight 1,000; Leaf Mold 952; Mosaic Virus 373, 14 times rarer.">
 
 - **Split:** 70 / 15 / 15, stratified per class, seed 42 (`preprocessing/scripts/split_dataset.py`)
 - **Imbalance tools:** a `WeightedRandomSampler` (dataloader) and focal loss (training). ⚠️ Use **one at a time**, because both together over-correct.
 - **Images never go into git.** Every member downloads them once (see letters **O–R** below).
-
-<p align="center"><img src="docs/class_distribution.png" width="640" alt="Class distribution of the PlantVillage tomato subset"></p>
 
 ---
 
@@ -114,6 +85,8 @@ python tools/doctor.py        # 0 failures = ready 🎉
 ---
 
 ## 🔤 Full setup, A to Z
+
+<img src="docs/readme/az.svg" width="100%" alt="Setup A to Z: Tools A–E, Repo F–J, Python K–N, Data O–R, Prove it S–V, Ship W–Z.">
 
 Six drawers, 26 letters. Open each one and work top to bottom. A printable copy lives in [`SETUP.md`](SETUP.md).
 
@@ -249,10 +222,7 @@ R26-IT-070/
 
 ## 🤝 Team workflow
 
-```mermaid
-flowchart LR
-    F["🔄 Fetch origin"] --> U["⬇️ Update from main"] --> C["✍️ Code"] --> T["🧪 pytest + doctor"] --> M["💾 Commit"] --> P["☁️ Push origin"] --> R["🔍 Pull request"] --> G["✅ Review → merge"]
-```
+<img src="docs/readme/workflow.svg" width="100%" alt="Team loop: fetch, update from main, code, test, commit, push, pull request, merge, repeat.">
 
 **🌿 Branches:** never commit to `main`. Name branches `<YourName>-<feature>`, e.g. `Aazim-lada-features`, `Maduwantha-classification-head`.
 
