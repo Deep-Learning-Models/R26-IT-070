@@ -8,49 +8,49 @@ import '../models/disease_result.dart';
 import '../models/severity_result.dart';
 
 class SegmentationService {
-  // ALAS-Net with SLA (Spatial Lesion Attention) - produces tighter, more accurate lesion masks
-  static const String _modelAsset = 'assets/models/alas_net_Severity_Segmentation_SLA_.tflite';
+  // ALAS-Net severity and lesion segmentation model with SLA.
+  static const String modelAsset =
+      'assets/models/alas_net_Severity_Segmentation_SLA_.tflite';
 
-  /// Runs segmentation inference using alas_net_NO_SLA.tflite to produce
-  /// pixel-level disease masks and severity metrics.
+  /// Runs the SLA segmentation model to produce a lesion overlay and severity metrics.
   static Future<SeverityResult> analyzeSeverity(
     ProcessedImageData imageData,
-    String diseaseName,
   ) async {
     try {
-      final ByteData modelData = await rootBundle.load(_modelAsset);
+      final ByteData modelData = await rootBundle.load(modelAsset);
       final Uint8List modelBytes = modelData.buffer.asUint8List();
 
-      final result = await compute(_runSegmentationIsolate, {
+      return await compute(_runSegmentationIsolate, {
         'imagePath': imageData.originalFile?.path,
         'imageBytes': imageData.imageBytes,
         'modelBytes': modelBytes,
-        'diseaseName': diseaseName,
       });
-
-      if (result != null) {
-        return result;
-      }
     } catch (e) {
       debugPrint('[SegmentationService] Error: $e');
+      rethrow;
     }
-
-    return _fallbackSeverity(diseaseName);
   }
 
-  static SeverityResult? _runSegmentationIsolate(Map<String, dynamic> args) {
+  static SeverityResult _runSegmentationIsolate(Map<String, dynamic> args) {
     final String? imagePath = args['imagePath'];
     final Uint8List? imageBytesRaw = args['imageBytes'];
     final Uint8List modelBytes = args['modelBytes'];
-    final String diseaseName = args['diseaseName'] ?? 'Tomato Disease';
 
     Interpreter? interpreter;
     try {
       final options = InterpreterOptions()..threads = 2;
       interpreter = Interpreter.fromBuffer(modelBytes, options: options);
+      if (!listEquals(interpreter.getInputTensor(0).shape, [1, 256, 256, 3]) ||
+          !listEquals(interpreter.getOutputTensor(0).shape, [1, 256, 256, 1]) ||
+          !listEquals(interpreter.getOutputTensor(1).shape, [1, 4]) ||
+          interpreter.getInputTensor(0).type != TensorType.float32 ||
+          interpreter.getOutputTensor(0).type != TensorType.float32 ||
+          interpreter.getOutputTensor(1).type != TensorType.float32) {
+        throw StateError('Unexpected segmentation model tensor format');
+      }
     } catch (e) {
-      print('[SegmentationService] Could not load model: $e');
-      return null;
+      interpreter?.close();
+      rethrow;
     }
 
     Uint8List? finalBytes = imageBytesRaw;
@@ -60,17 +60,18 @@ class SegmentationService {
     }
     if (finalBytes == null) {
       interpreter.close();
-      return null;
+      throw StateError('No image available for segmentation');
     }
 
     final img.Image? decoded = img.decodeImage(finalBytes);
     if (decoded == null) {
       interpreter.close();
-      return null;
+      throw StateError('The image could not be decoded');
     }
 
     const int targetSize = 256;
-    final img.Image resized = img.copyResize(decoded, width: targetSize, height: targetSize);
+    final img.Image resized =
+        img.copyResize(decoded, width: targetSize, height: targetSize);
 
     // Prepare input tensor: [1, 256, 256, 3] normalized [0, 1]
     final inputTensor = List.generate(
@@ -105,7 +106,7 @@ class SegmentationService {
       ),
     );
 
-    // Output 1: Severity classification logits [1, 4]
+    // Output 1: CORAL rank probabilities for five ordered severity grades.
     final severityOutput = List.generate(
       1,
       (_) => List.filled(4, 0.0),
@@ -114,152 +115,144 @@ class SegmentationService {
     try {
       interpreter.runForMultipleInputs(
         [inputTensor],
-        {
-          0: maskOutput,
-          1: severityOutput,
-        },
+        {0: maskOutput, 1: severityOutput},
       );
-    } catch (e) {
-      print('[SegmentationService] runForMultipleInputs failed ($e), trying single output...');
-      try {
-        interpreter.run(inputTensor, maskOutput);
-      } catch (e2) {
-        print('[SegmentationService] Single run failed: $e2');
-        interpreter.close();
-        return null;
-      }
     } finally {
       interpreter.close();
     }
 
-    // Output: Decode lesion mask by isolating symptomatic/necrotic lesions inside the leaf
+    // The exported model already applies its own leaf gate to this mask.
+    // Display its output directly, without an additional colour filter.
     final img.Image maskImage = img.Image(
       width: targetSize,
       height: targetSize,
       numChannels: 4,
     );
-
-    // SLA model outputs: high probability = LESION, low probability = healthy foliage
-    // (opposite of NO_SLA which predicts healthy tissue as high confidence)
-    final List<List<double>> probMap = List.generate(targetSize, (_) => List.filled(targetSize, 0.0));
-    final List<List<bool>> isLesion = List.generate(targetSize, (_) => List.filled(targetSize, false));
-    final List<List<bool>> isLeafTissue = List.generate(targetSize, (_) => List.filled(targetSize, false));
-
-    for (int y = 0; y < targetSize; y++) {
-      for (int x = 0; x < targetSize; x++) {
-        final double rawVal = maskOutput[0][y][x][0];
-        // Apply sigmoid if output is a logit (outside 0-1 range)
-        final double prob = (rawVal > 1.0 || rawVal < 0.0)
-            ? (1.0 / (1.0 + exp(-rawVal)))
-            : rawVal;
-        probMap[y][x] = prob;
-
-        // SLA: high confidence = lesion pixel
-        // Use 0.50 threshold — SLA attention map is tight around actual lesions
-        if (prob >= 0.50) {
-          isLesion[y][x] = true;
-        }
-
-        // Leaf tissue = any prob > 0.10 (includes both healthy and lesion pixels)
-        if (prob >= 0.10) {
-          isLeafTissue[y][x] = true;
-        }
-      }
+    final int totalLeafPixels = _nativeLeafArea(resized);
+    if (totalLeafPixels < targetSize * targetSize * 0.01) {
+      throw StateError(
+          'The model could not identify enough leaf area in this photo');
     }
-
-    // Morphological dilation to build full leaf envelope from any tissue signals
-    const int dilationRadius = 6;
-    final List<List<bool>> leafEnvelope = List.generate(targetSize, (_) => List.filled(targetSize, false));
-
-    for (int y = 0; y < targetSize; y++) {
-      for (int x = 0; x < targetSize; x++) {
-        if (isLeafTissue[y][x]) {
-          final int minY = max(0, y - dilationRadius);
-          final int maxY = min(targetSize - 1, y + dilationRadius);
-          final int minX = max(0, x - dilationRadius);
-          final int maxX = min(targetSize - 1, x + dilationRadius);
-          for (int ny = minY; ny <= maxY; ny++) {
-            for (int nx = minX; nx <= maxX; nx++) {
-              leafEnvelope[ny][nx] = true;
-            }
-          }
-        }
-      }
-    }
-
-    // Count healthy (non-lesion leaf tissue) pixels for severity denominator
-    int healthyPixels = 0;
+    final acceptedLesions = List<bool>.filled(targetSize * targetSize, false);
     int diseasePixels = 0;
 
     for (int y = 0; y < targetSize; y++) {
       for (int x = 0; x < targetSize; x++) {
-        // Only consider pixels that are within the actual leaf boundary
-        if (!leafEnvelope[y][x]) {
-          maskImage.setPixelRgba(x, y, 0, 0, 0, 0);
-          continue;
+        final double prob = maskOutput[0][y][x][0];
+        if (!prob.isFinite || prob < 0.0 || prob > 1.0) {
+          throw StateError(
+              'Invalid lesion probability from segmentation model');
         }
-
-        final pixel = resized.getPixel(x, y);
-        final int brightness = (pixel.r + pixel.g + pixel.b).toInt();
-        final bool isNotBackground = brightness > 45 && brightness < 720;
-
-        if (!isNotBackground) {
-          maskImage.setPixelRgba(x, y, 0, 0, 0, 0);
-          continue;
-        }
-
-        if (isLesion[y][x]) {
+        if (prob >= 0.5) {
+          acceptedLesions[y * targetSize + x] = true;
           diseasePixels++;
-          // Alpha intensity proportional to lesion confidence above threshold
-          final double prob = probMap[y][x];
-          final int alpha = ((prob - 0.50) / 0.50 * 180 + 140).toInt().clamp(140, 230);
-          maskImage.setPixelRgba(x, y, 239, 68, 68, alpha);
+          maskImage.setPixelRgba(x, y, 220, 45, 35, 160);
         } else {
-          healthyPixels++;
           maskImage.setPixelRgba(x, y, 0, 0, 0, 0);
         }
       }
     }
 
-    final int totalLeafPixels = healthyPixels + diseasePixels;
-    final double affectedArea = totalLeafPixels > 0
-        ? (diseasePixels / totalLeafPixels) * 100.0
-        : 0.0;
-    final Uint8List maskPngBytes = Uint8List.fromList(img.encodePng(maskImage));
-
-    // Determine Severity Level
-    SeverityLevel level = SeverityLevel.healthy;
-    if (affectedArea > 28.0) {
-      level = SeverityLevel.severe;
-    } else if (affectedArea > 10.0) {
-      level = SeverityLevel.moderate;
-    } else if (affectedArea > 0.8) {
-      level = SeverityLevel.mild;
+    // A thin outline makes the segmented regions readable like the notebook's
+    // final visualization without changing the measured lesion area.
+    for (int y = 1; y < targetSize - 1; y++) {
+      for (int x = 1; x < targetSize - 1; x++) {
+        final index = y * targetSize + x;
+        if (acceptedLesions[index]) continue;
+        if (acceptedLesions[index - targetSize] ||
+            acceptedLesions[index + targetSize] ||
+            acceptedLesions[index - 1] ||
+            acceptedLesions[index + 1]) {
+          maskImage.setPixelRgba(x, y, 255, 205, 20, 220);
+        }
+      }
     }
 
-    final double displayPercent = affectedArea < 0.1 ? 0.0 : double.parse(affectedArea.toStringAsFixed(1));
-    final int estimatedLesions = (diseasePixels / 120).clamp(1, 40).toInt();
-    final double healthScore = (100.0 - displayPercent).clamp(0.0, 100.0);
+    final double affectedArea =
+        (diseasePixels / totalLeafPixels * 100.0).clamp(0.0, 100.0);
+    // The image is stretched to 256×256 for inference. Restore its original
+    // aspect ratio so the mask follows the same BoxFit.cover as the photo.
+    final img.Image displayMask = img.copyResize(
+      maskImage,
+      width: decoded.width,
+      height: decoded.height,
+      interpolation: img.Interpolation.nearest,
+    );
+    final Uint8List maskPngBytes =
+        Uint8List.fromList(img.encodePng(displayMask));
 
+    // Training decodes the CORAL head by counting thresholds above 0.5:
+    // Healthy, Mild, Moderate, Severe, Very Severe.
+    if (severityOutput[0]
+        .any((score) => !score.isFinite || score < 0.0 || score > 1.0)) {
+      throw StateError(
+          'Invalid severity probabilities from segmentation model');
+    }
+    final int grade = severityOutput[0].where((score) => score > 0.5).length;
+    final SeverityLevel level = switch (grade) {
+      0 => SeverityLevel.healthy,
+      1 => SeverityLevel.mild,
+      2 => SeverityLevel.moderate,
+      3 => SeverityLevel.severe,
+      _ => SeverityLevel.verySevere,
+    };
+
+    final double displayPercent =
+        double.parse(affectedArea.toStringAsFixed(1));
     return SeverityResult(
       level: level,
       affectedAreaPercentage: displayPercent,
-      totalLesionCount: diseasePixels > 0 ? estimatedLesions : 0,
+      totalLesionCount: null,
       primarySymptom: diseasePixels > 0
-          ? 'Segmented ${diseaseName.replaceAll('Tomato ', '')} active lesions'
-          : 'Foliage appears clear of active necrotic lesions',
-      leafTissueHealthScore: '${healthScore.toStringAsFixed(1)} / 100',
+          ? 'The model marked possible affected regions'
+          : 'No affected regions passed the mask threshold',
+      leafTissueHealthScore: null,
       maskImageBytes: maskPngBytes,
     );
   }
 
-  static SeverityResult _fallbackSeverity(String diseaseName) {
-    return SeverityResult(
-      level: SeverityLevel.moderate,
-      affectedAreaPercentage: 18.5,
-      totalLesionCount: 12,
-      primarySymptom: 'Identified ${diseaseName.replaceAll('Tomato ', '')} leaf lesions',
-      leafTissueHealthScore: '81.5 / 100',
-    );
+  static int _nativeLeafArea(img.Image image) {
+    final int width = image.width;
+    final int height = image.height;
+    List<double> gate = List<double>.filled(width * height, 0.0);
+    double sigmoid(double value) => 1.0 / (1.0 + exp(-value));
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final pixel = image.getPixel(x, y);
+        final double r = pixel.r / 255.0;
+        final double g = pixel.g / 255.0;
+        final double b = pixel.b / 255.0;
+        final double value = max(r, max(g, b));
+        final double minimum = min(r, min(g, b));
+        final double saturation = value > 0 ? (value - minimum) / value : 0.0;
+        gate[y * width + x] = sigmoid((saturation - 0.12) * 40.0) *
+            sigmoid((value - 0.05) * 40.0) *
+            sigmoid((0.98 - value) * 40.0);
+      }
+    }
+
+    // Reproduce the two SAME-padded 5×5 pooling steps in the exported gate.
+    for (int pass = 0; pass < 2; pass++) {
+      final smoothed = List<double>.filled(width * height, 0.0);
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          double sum = 0.0;
+          for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+              final int ny = y + dy;
+              final int nx = x + dx;
+              if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+                sum += gate[ny * width + nx];
+              }
+            }
+          }
+          smoothed[y * width + x] = sum / 25.0;
+        }
+      }
+      gate = smoothed;
+    }
+
+    return gate.where((value) => value >= 0.5).length;
   }
 }

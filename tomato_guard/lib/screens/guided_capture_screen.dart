@@ -13,10 +13,11 @@ class GuidedCaptureScreen extends StatefulWidget {
   State<GuidedCaptureScreen> createState() => _GuidedCaptureScreenState();
 }
 
-class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsBindingObserver {
+class _GuidedCaptureScreenState extends State<GuidedCaptureScreen>
+    with WidgetsBindingObserver {
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
-  
+
   final LeafDetector _leafDetector = LeafDetector();
   BoundingBox? _currentBox;
 
@@ -26,9 +27,7 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
   bool _isTakingPicture = false;
 
   QualityAnalysisResult _currentQuality = const QualityAnalysisResult(
-    CaptureQuality.poor, 
-    "Loading TFLite model..."
-  );
+      CaptureQuality.poor, "Loading TFLite model...");
 
   DateTime _lastAnalysisTime = DateTime.now();
   final int _analysisIntervalMs = 150;
@@ -45,7 +44,8 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
     await _leafDetector.loadModel();
     if (mounted) {
       setState(() {
-        _currentQuality = const QualityAnalysisResult(CaptureQuality.poor, "Initializing camera...");
+        _currentQuality = const QualityAnalysisResult(
+            CaptureQuality.poor, "Initializing camera...");
       });
     }
     // 2. Setup Camera
@@ -55,8 +55,8 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _cameraController?.stopImageStream();
     _cameraController?.dispose();
+    _cameraController = null;
     _leafDetector.dispose();
     super.dispose();
   }
@@ -64,16 +64,15 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final CameraController? cameraController = _cameraController;
-    
-    if (cameraController == null || !cameraController.value.isInitialized) {
-      return;
-    }
 
     if (state == AppLifecycleState.inactive) {
-      cameraController.stopImageStream();
-      cameraController.dispose();
+      _cameraController = null;
+      _isCameraInitialized = false;
+      cameraController?.dispose();
     } else if (state == AppLifecycleState.resumed) {
-      _initCamera(cameraController.description);
+      if (cameraController == null && mounted && _isPermissionGranted) {
+        _setupCameras();
+      }
     }
   }
 
@@ -103,22 +102,29 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
   }
 
   Future<void> _initCamera(CameraDescription description) async {
-    _cameraController = CameraController(
+    final controller = CameraController(
       description,
       ResolutionPreset.medium, // Optimal 60fps mobile preview
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
+    _cameraController = controller;
 
     try {
-      await _cameraController!.initialize();
+      await controller.initialize();
+      if (!mounted || _cameraController != controller) {
+        await controller.dispose();
+        return;
+      }
       setState(() => _isCameraInitialized = true);
-      
-      _cameraController!.startImageStream((CameraImage image) async {
+
+      await controller.startImageStream((CameraImage image) async {
+        if (!mounted || _cameraController != controller) return;
         if (_isAnalyzing || _isTakingPicture) return;
 
         final now = DateTime.now();
-        if (now.difference(_lastAnalysisTime).inMilliseconds < _analysisIntervalMs) {
+        if (now.difference(_lastAnalysisTime).inMilliseconds <
+            _analysisIntervalMs) {
           return;
         }
 
@@ -128,10 +134,10 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
         try {
           // 1. Detect Leaf via fast YOLO
           final BoundingBox? box = await _leafDetector.detect(image);
-          
+
           // 2. Analyze quality rules (Area, Centering, Lighting, Blur)
           final result = await QualityAnalyzer.analyze(image, box);
-          
+
           if (mounted) {
             setState(() {
               // Smooth box transition if box exists
@@ -161,7 +167,9 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
   }
 
   Future<void> _captureImage() async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized || _isTakingPicture) {
+    if (_cameraController == null ||
+        !_cameraController!.value.isInitialized ||
+        _isTakingPicture) {
       return;
     }
 
@@ -170,7 +178,7 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
     try {
       await _cameraController!.stopImageStream();
       final XFile imageFile = await _cameraController!.takePicture();
-      
+
       if (mounted) {
         Navigator.pop(context, imageFile);
       }
@@ -263,7 +271,7 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
             right: 0,
             child: _buildCaptureControls(),
           ),
-          
+
           // 6. Back Button
           Positioned(
             top: 48,
@@ -274,7 +282,8 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
                 shape: BoxShape.circle,
               ),
               child: IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                icon: const Icon(Icons.arrow_back_ios_new,
+                    color: Colors.white, size: 20),
                 onPressed: () => Navigator.pop(context),
               ),
             ),
@@ -286,8 +295,8 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
 
   Widget _buildStatusBanner() {
     final boxColor = _getQualityColor();
-    final String confStr = _currentBox != null 
-        ? " (${(_currentBox!.confidence * 100.0).clamp(0.0, 100.0).toStringAsFixed(1)}%)" 
+    final String confStr = _currentBox != null
+        ? " (${(_currentBox!.confidence * 100.0).clamp(0.0, 100.0).toStringAsFixed(1)}%)"
         : "";
     final displayMessage = "${_currentQuality.message}$confStr";
 
@@ -343,7 +352,7 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
 
   Widget _buildCaptureControls() {
     final isGood = _currentQuality.quality == CaptureQuality.good;
-    
+
     // Hide capture button if not good
     if (!isGood && !_isTakingPicture) {
       return const SizedBox(height: 100);
@@ -374,7 +383,8 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
                     color: AppTheme.primaryDark,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.camera_alt, color: Colors.white, size: 30),
+                  child: const Icon(Icons.camera_alt,
+                      color: Colors.white, size: 30),
                 ),
               ),
             ),
@@ -394,7 +404,8 @@ class _GuidedCaptureScreenState extends State<GuidedCaptureScreen> with WidgetsB
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.camera_alt_outlined, size: 64, color: AppTheme.primaryDark),
+              const Icon(Icons.camera_alt_outlined,
+                  size: 64, color: AppTheme.primaryDark),
               const SizedBox(height: 16),
               const Text(
                 'Camera Access Required',
@@ -425,7 +436,7 @@ class BoundingBoxPainter extends CustomPainter {
   final double scaleY;
 
   BoundingBoxPainter({
-    required this.box, 
+    required this.box,
     required this.color,
     required this.scaleX,
     required this.scaleY,
@@ -442,17 +453,15 @@ class BoundingBoxPainter extends CustomPainter {
       ..color = color.withOpacity(0.15)
       ..style = PaintingStyle.fill;
 
-    final rect = Rect.fromLTWH(
-      box.x * size.width, 
-      box.y * size.height, 
-      box.width * size.width, 
-      box.height * size.height
-    );
+    final rect = Rect.fromLTWH(box.x * size.width, box.y * size.height,
+        box.width * size.width, box.height * size.height);
 
     // Draw filled transparent background
-    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(12)), fillPaint);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(12)), fillPaint);
     // Draw thick border
-    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(12)), paint);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(12)), paint);
 
     // Draw live confidence score badge
     final double scorePercent = (box.confidence * 100.0).clamp(0.0, 100.0);
@@ -474,8 +483,10 @@ class BoundingBoxPainter extends CustomPainter {
     const double padV = 4.0;
     final double bgW = tp.width + (padH * 2);
     final double bgH = tp.height + (padV * 2);
-    final double badgeLeft = rect.left.clamp(0.0, (size.width - bgW).clamp(0.0, size.width));
-    final double badgeTop = (rect.top - bgH - 6).clamp(0.0, (size.height - bgH).clamp(0.0, size.height));
+    final double badgeLeft =
+        rect.left.clamp(0.0, (size.width - bgW).clamp(0.0, size.width));
+    final double badgeTop = (rect.top - bgH - 6)
+        .clamp(0.0, (size.height - bgH).clamp(0.0, size.height));
 
     final RRect badgeRRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(badgeLeft, badgeTop, bgW, bgH),
@@ -540,7 +551,8 @@ class CenterReticlePainter extends CustomPainter {
     final pathBL = Path()
       ..moveTo(left, bottom - cornerLength)
       ..lineTo(left, bottom - radius)
-      ..arcToPoint(Offset(left + radius, bottom), radius: Radius.circular(radius))
+      ..arcToPoint(Offset(left + radius, bottom),
+          radius: Radius.circular(radius))
       ..lineTo(left + cornerLength, bottom);
     canvas.drawPath(pathBL, paint);
 
@@ -548,7 +560,8 @@ class CenterReticlePainter extends CustomPainter {
     final pathBR = Path()
       ..moveTo(right - cornerLength, bottom)
       ..lineTo(right - radius, bottom)
-      ..arcToPoint(Offset(right, bottom - radius), radius: Radius.circular(radius))
+      ..arcToPoint(Offset(right, bottom - radius),
+          radius: Radius.circular(radius))
       ..lineTo(right, bottom - cornerLength);
     canvas.drawPath(pathBR, paint);
 
@@ -556,7 +569,8 @@ class CenterReticlePainter extends CustomPainter {
     final centerPaint = Paint()
       ..color = color.withOpacity(0.4)
       ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(size.width / 2, size.height / 2), isGood ? 4.0 : 2.5, centerPaint);
+    canvas.drawCircle(Offset(size.width / 2, size.height / 2),
+        isGood ? 4.0 : 2.5, centerPaint);
   }
 
   @override

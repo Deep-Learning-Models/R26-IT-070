@@ -63,7 +63,7 @@ class ScanRecord {
       diseaseName: result.diseaseName,
       scientificName: result.scientificName,
       confidencePercentage: result.confidencePercentage,
-      isEnhancedByLada: false,
+      isEnhancedByLada: result.isLadaEnhanced,
       severityLevel: result.severity.level.displayName,
       affectedAreaPercentage: result.severity.affectedAreaPercentage,
       overview: result.overview,
@@ -75,18 +75,28 @@ class ScanRecord {
   /// Convert ScanRecord back into a full DiseaseResult for re-inspection in UI screens
   DiseaseResult toDiseaseResult() {
     SeverityLevel parseSeverity(String levelStr) {
+      if (levelStr.toLowerCase().contains('very severe')) {
+        return SeverityLevel.verySevere;
+      }
+      if (levelStr.toLowerCase().contains('very mild')) {
+        return SeverityLevel.veryMild;
+      }
       if (levelStr.toLowerCase().contains('mild')) return SeverityLevel.mild;
-      if (levelStr.toLowerCase().contains('moderate')) return SeverityLevel.moderate;
-      if (levelStr.toLowerCase().contains('severe')) return SeverityLevel.severe;
+      if (levelStr.toLowerCase().contains('moderate')) {
+        return SeverityLevel.moderate;
+      }
+      if (levelStr.toLowerCase().contains('severe')) {
+        return SeverityLevel.severe;
+      }
       return SeverityLevel.healthy;
     }
 
     final severityObj = SeverityResult(
       level: parseSeverity(severityLevel),
       affectedAreaPercentage: affectedAreaPercentage,
-      totalLesionCount: (affectedAreaPercentage / 1.8).round(),
-      primarySymptom: 'Concentric necrotic lesions on lower leaves',
-      leafTissueHealthScore: '${(100.0 - affectedAreaPercentage).toStringAsFixed(1)} / 100',
+      totalLesionCount: null,
+      primarySymptom: 'Historical mask is unavailable for this saved scan',
+      leafTissueHealthScore: null,
     );
 
     return DiseaseResult(
@@ -99,6 +109,7 @@ class ScanRecord {
       ),
       severity: severityObj,
       treatment: DiseaseService.getDefaultTreatment(),
+      isLadaEnhanced: isEnhancedByLada,
     );
   }
 }

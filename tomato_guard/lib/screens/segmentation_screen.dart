@@ -5,6 +5,7 @@ import '../theme/app_theme.dart';
 import '../widgets/badge_chip.dart';
 import '../widgets/section_header.dart';
 import '../widgets/segmented_image_view.dart';
+import '../widgets/severity_explanation_view.dart';
 import '../widgets/custom_button.dart';
 import 'treatment_screen.dart';
 
@@ -16,6 +17,9 @@ class SegmentationScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final severity = diseaseResult.severity;
+    final classificationHealthy =
+        diseaseResult.diseaseName == 'Healthy Tomato Plant';
+    final severityHealthy = severity.level == SeverityLevel.healthy;
 
     return Scaffold(
       backgroundColor: AppTheme.softBackground,
@@ -28,7 +32,7 @@ class SegmentationScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Segmented Leaf Image with Green Mask Overlay
+              // Original photo with the model's lesion mask overlay.
               SegmentedImageView(
                 imageData: diseaseResult.imageData,
                 severity: severity,
@@ -53,7 +57,7 @@ class SegmentationScreen extends StatelessWidget {
                         children: [
                           const Expanded(
                             child: Text(
-                              'Infection Severity',
+                              'Predicted Severity',
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 18,
@@ -71,21 +75,25 @@ class SegmentationScreen extends StatelessWidget {
 
                       // LADA Channel Enhancement Banner
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
                         decoration: BoxDecoration(
                           color: const Color(0xFF2E7D32).withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFF2E7D32).withValues(alpha: 0.3)),
+                          border: Border.all(
+                              color: const Color(0xFF2E7D32)
+                                  .withValues(alpha: 0.3)),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.auto_awesome, size: 16, color: Color(0xFF2E7D32)),
+                            const Icon(Icons.auto_awesome,
+                                size: 16, color: Color(0xFF2E7D32)),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 diseaseResult.isLadaEnhanced
-                                    ? 'LADA SLA Multi-Channel Attention Active'
-                                    : 'Baseline ALAS-Net Segmentation',
+                                    ? 'Color enhancement used for classification; lesion mask uses original photo'
+                                    : 'Lesion mask uses original photo',
                                 style: const TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
@@ -98,6 +106,17 @@ class SegmentationScreen extends StatelessWidget {
                       ),
 
                       const SizedBox(height: 12),
+
+                      if (classificationHealthy != severityHealthy) ...[
+                        const Text(
+                          'The disease classifier and severity model disagree on whether this leaf is healthy. Review the photo and try another scan before using the treatment advice.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.severitySevere,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
 
                       // Affected Area Percentage Gauge Card
                       Container(
@@ -129,7 +148,7 @@ class SegmentationScreen extends StatelessWidget {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   const Text(
-                                    'Affected Leaf Area',
+                                    'Estimated Masked Leaf Area',
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: AppTheme.textMuted,
@@ -154,39 +173,28 @@ class SegmentationScreen extends StatelessWidget {
 
                       const SizedBox(height: 20),
 
-                      // Detailed Metrics Breakdown Grid
+                      const Text(
+                        'The percentage comes from the predicted lesion mask and the model’s leaf gate. '
+                        'The severity grade is predicted by a separate model output, so the two may differ.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textMuted,
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // Model output summary.
                       const SectionHeader(
-                        title: 'Morphological Lesion Analysis',
-                        subtitle: 'Leaf tissue surface area segmentation data',
+                        title: 'Predicted Lesion Regions',
+                        subtitle: 'Areas highlighted by the segmentation model',
                         icon: Icons.grain_outlined,
                       ),
 
                       const SizedBox(height: 12),
 
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildMetricTile(
-                              label: 'Total Lesion Count',
-                              value: '${severity.totalLesionCount} Spots',
-                              icon: Icons.bubble_chart_outlined,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildMetricTile(
-                              label: 'Tissue Health Index',
-                              value: severity.leafTissueHealthScore,
-                              icon: Icons.health_and_safety_outlined,
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 16),
-
                       _buildMetricTile(
-                        label: 'Primary Pathogen Manifestation',
+                        label: 'Mask Summary',
                         value: severity.primarySymptom,
                         icon: Icons.center_focus_weak_outlined,
                       ),
@@ -200,10 +208,22 @@ class SegmentationScreen extends StatelessWidget {
                               color: AppTheme.textDark,
                             ),
                       ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Review the highlighted regions before acting on this result.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textMuted,
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
+
+              const SizedBox(height: 20),
+
+              SeverityExplanationView(imageData: diseaseResult.imageData),
 
               const SizedBox(height: 20),
 
@@ -241,7 +261,7 @@ class SegmentationScreen extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.accentMint.withOpacity(0.5)),
+        border: Border.all(color: AppTheme.accentMint.withValues(alpha: 0.5)),
       ),
       child: Row(
         children: [

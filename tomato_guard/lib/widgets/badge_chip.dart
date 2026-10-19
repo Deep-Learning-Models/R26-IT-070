@@ -76,11 +76,15 @@ class SeverityBadgeChip extends StatelessWidget {
 
   Color get _color {
     switch (level) {
+      case SeverityLevel.veryMild:
+        return AppTheme.severityMild;
       case SeverityLevel.mild:
         return AppTheme.severityMild;
       case SeverityLevel.moderate:
         return AppTheme.severityModerate;
       case SeverityLevel.severe:
+        return AppTheme.severitySevere;
+      case SeverityLevel.verySevere:
         return AppTheme.severitySevere;
       case SeverityLevel.healthy:
         return AppTheme.primaryDark;
@@ -89,11 +93,15 @@ class SeverityBadgeChip extends StatelessWidget {
 
   IconData get _icon {
     switch (level) {
+      case SeverityLevel.veryMild:
+        return Icons.info_outline;
       case SeverityLevel.mild:
         return Icons.info_outline;
       case SeverityLevel.moderate:
         return Icons.warning_amber_rounded;
       case SeverityLevel.severe:
+        return Icons.error_outline;
+      case SeverityLevel.verySevere:
         return Icons.error_outline;
       case SeverityLevel.healthy:
         return Icons.check_circle_outline;

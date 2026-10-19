@@ -1,7 +1,0 @@
-Model File: assets/models/tomato_leaf_yolov8.tflite (103655387 bytes)
-
---- INPUT TENSORS ---
-Input 0: Name='serving_default_args_0', Shape=[  1   3 640 640], Type=<class 'numpy.float32'>
-
---- OUTPUT TENSORS ---
-Output 0: Name='serving_default_output_0_output', Shape=[   1   14 8400], Type=<class 'numpy.float32'>
